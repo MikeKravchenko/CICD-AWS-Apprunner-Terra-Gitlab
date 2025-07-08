@@ -1,0 +1,118 @@
+stages:
+  - backend
+  - discover
+  - infra
+  - build
+  - deploy
+
+create_backend:
+  stage: backend
+  image:
+    name: hashicorp/terraform:1.8.5
+    entrypoint: [""]
+  script:
+    - terraform init
+    - terraform apply -auto-approve -target=aws_s3_bucket.tfstate -target=aws_dynamodb_table.tfstate_lock || true
+  rules:
+    - when: always
+
+discover_apps:
+  stage: discover
+  image: python:3.11
+  script:
+    - pip install pyyaml
+    - python list_applications.py
+  artifacts:
+    paths:
+      - found_apps.txt
+      - terraform/locals.auto.tfvars.json
+  needs: ["create_backend"]
+  rules:
+    - when: always
+
+terraform_infra:
+  stage: infra
+  image:
+    name: hashicorp/terraform:1.8.5
+    entrypoint: [""]
+  script:
+    - cd terraform
+    - terraform init
+    - terraform apply -auto-approve -target=module.app -var="aws_account_id=$AWS_ACCOUNT_ID" -var="aws_region=$AWS_DEFAULT_REGION"
+  needs: ["discover_apps", "create_backend"]
+  rules:
+    - when: always
+
+build_apps:
+  stage: build
+  image: docker:24.0.5
+  services:
+    - docker:24.0.5-dind
+  before_script:
+    - apk add --no-cache bash curl jq unzip python3 py3-pip
+    - pip install awscli
+    - curl -Lo terraform.zip https://releases.hashicorp.com/terraform/1.8.5/terraform_1.8.5_linux_amd64.zip
+    - unzip -o terraform.zip -d /usr/local/bin
+    - chmod +x /usr/local/bin/terraform
+    - |
+      aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | \
+        docker login --username AWS --password-stdin "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com"
+  script:
+    - |
+      while read app_dir; do
+        app_name=$(basename "$app_dir")
+        ecr_repo="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${app_name}_repository-behavox-platform-sre"
+        for i in {1..60}; do
+          aws ecr describe-repositories --repository-names "${app_name}_repository-behavox-platform-sre" && break || sleep 5
+        done
+        for i in {1..12}; do
+          docker pull alpine:3.18
+          docker tag alpine:3.18 "$ecr_repo:dummy"
+          if docker push "$ecr_repo:dummy"; then
+            docker rmi "$ecr_repo:dummy"
+            break
+          else
+            sleep 5
+          fi
+        done
+        echo "Building $app_name from $app_dir"
+        docker build -t "$app_name:latest" "$app_dir"
+        docker tag "$app_name:latest" "$ecr_repo:latest"
+        docker push "$ecr_repo:latest"
+      done < found_apps.txt
+  needs:
+    - terraform_infra
+    - discover_apps
+    - create_backend
+  rules:
+    - when: always
+
+terraform_deploy:
+  stage: deploy
+  image:
+    name: hashicorp/terraform:1.8.5
+    entrypoint: [""]
+  script:
+    - cd terraform
+    - terraform init
+    - terraform apply -auto-approve -var="aws_account_id=$AWS_ACCOUNT_ID" -var="aws_region=$AWS_DEFAULT_REGION"
+  needs:
+    - build_apps
+    - terraform_infra
+    - discover_apps
+    - create_backend
+  rules:
+    - when: always
+
+cleanup:
+  stage: deploy
+  image:
+    name: hashicorp/terraform:1.8.5
+    entrypoint: [""]
+  script:
+    - cd terraform
+    - terraform init
+    - terraform destroy -auto-approve -var="aws_account_id=$AWS_ACCOUNT_ID" -var="aws_region=$AWS_DEFAULT_REGION"
+  when: manual
+  rules:
+    - when: manual

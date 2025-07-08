@@ -1,0 +1,10 @@
+variable "app_name" { type = string }
+variable "port" { type = number }
+variable "cpu" { type = number }
+variable "memory" { type = number }
+variable "aws_account_id" { type = string }
+variable "aws_region" { type = string }
+variable "ecr_repo_url" { type = string }
+variable "s3_bucket_name" { type = string }
+variable "iam_role_arn" { type = string }
+variable "ecr_access_role_arn" { type = string }

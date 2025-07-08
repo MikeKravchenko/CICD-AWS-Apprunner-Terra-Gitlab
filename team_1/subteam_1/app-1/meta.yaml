@@ -1,0 +1,55 @@
+provision:
+  # ECR repository to push built app
+  # https://us-west-2.console.aws.amazon.com/ecr/home?region=us-west-2
+  - type: "ecr_registry"
+    name: "{name}_repository"
+
+  # IAM role to be assigned to running app
+  # https://us-east-1.console.aws.amazon.com/iam/home?region=us-west-2#/roles
+  - type: "iam_role"
+    name: "{name}_role"
+    trust_relationship: |
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Principal": {
+              "Service": "tasks.apprunner.amazonaws.com"
+            },
+            "Action": "sts:AssumeRole"
+          }
+        ]
+      }
+    inline_policy_content: |
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": [
+              "s3:*"
+            ],
+            "Resource": [
+              "arn:aws:s3:::{name}-data",
+              "arn:aws:s3:::{name}-data/*"
+            ]
+          }
+        ]
+      }
+
+  # Bucket in which service is going to write data
+  # https://us-west-2.console.aws.amazon.com/s3/get-started?region=us-west-2
+  - type: "s3_bucket"
+    name: "{name}-data"
+
+  # AppRunner service using image pushed to ECR
+  # https://us-west-2.console.aws.amazon.com/apprunner/home?region=us-west-2
+  - type: "app_runner"
+    name: "{name}_service"
+    image: "{name}_repository:latest"
+    port: 80
+    cpu: 256
+    mem: 512 # MB
+    access_role_arn: "role/service-role/AppRunnerECRAccessRole" # Already Exists
+    instance_role_arn: "role/{name}_role"
