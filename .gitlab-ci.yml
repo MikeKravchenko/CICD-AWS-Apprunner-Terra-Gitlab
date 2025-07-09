@@ -11,6 +11,7 @@ create_backend:
     name: hashicorp/terraform:1.8.5
     entrypoint: [""]
   script:
+    - cd terraform
     - terraform init
     - terraform apply -auto-approve -target=aws_s3_bucket.tfstate -target=aws_dynamodb_table.tfstate_lock || true
   rules:
